@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{0} - Webserve</title>
+</head>
+
+<body>
+    <script type="module">
+        {1}
+        fetch("{2}")
+            .then(response => response.arrayBuffer())
+            .then(buffer => WebAssembly.instantiate(buffer))
+            .then(results => results.instance)
+            .then(instance => {
+                load(instance);
+            })
+            .catch(err => console.error(err));
+    </script>
+</body>
+
+</html>
