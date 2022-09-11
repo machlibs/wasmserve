@@ -9,7 +9,7 @@ pub fn build(b: *std.build.Builder) !void {
     exe.setTarget(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none });
     exe.install();
 
-    const serve_step = try wasmserve.serve(exe, &.{"wasmserve.zig"}, null, null, null);
+    const serve_step = try wasmserve.serve(exe, .{ .root_dir = ".", .watch_paths = &.{"wasmserve.zig"}, .serve_paths = &.{ "build.zig", ".github" } });
     const run_step = b.step("run", "");
     run_step.dependOn(&serve_step.step);
 }
