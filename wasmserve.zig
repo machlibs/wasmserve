@@ -10,6 +10,12 @@ const LibExeObjStep = std.build.LibExeObjStep;
 const index_unformatted = @embedFile("template/index.html");
 const default_mime = "text/plain";
 const max_file_size = 100 * 1024 * 1024 * 1024; // 100MB
+const colors = struct {
+    pub const reset = "\x1b[0m";
+    pub const red = "\x1b[31m";
+    pub const yellow = "\x1b[33m";
+    pub const cyan = "\x1b[36m";
+};
 
 pub const Options = struct {
     root_dir: []const u8,
@@ -23,6 +29,7 @@ pub fn serve(step: *LibExeObjStep, options: Options) fs.File.OpenError!*Wasmserv
     self.* = Wasmserve{
         .step = Step.init(.run, "wasmserve", step.builder.allocator, Wasmserve.make),
         .cwd = try fs.cwd().openDir(options.root_dir, .{}),
+        // crashes if `step.builder.zig_exe` used instead `zig`
         .build_proc = std.ChildProcess.init(&.{ "zig", "build", "install" }, step.builder.allocator),
         .exe_step = step,
         .allocator = step.builder.allocator,
@@ -31,6 +38,7 @@ pub fn serve(step: *LibExeObjStep, options: Options) fs.File.OpenError!*Wasmserv
         .watch_paths = options.watch_paths,
         .serve_paths = options.serve_paths,
         .stream_server = std.net.StreamServer.init(.{ .reuse_address = true }),
+        .mtimes = std.AutoHashMap(fs.File.INode, i128).init(step.builder.allocator),
         .server_thread = undefined,
         .conn_buf = undefined,
     };
@@ -50,6 +58,7 @@ const Wasmserve = struct {
     server_thread: std.Thread,
     address: net.Address,
     stream_server: net.StreamServer,
+    mtimes: std.AutoHashMap(fs.File.INode, i128),
     conn_buf: [1024]u8,
     root_dir: []const u8,
     watch_paths: []const []const u8,
@@ -67,6 +76,10 @@ const Wasmserve = struct {
 
     fn runServer(self: *Wasmserve) !void {
         try self.stream_server.listen(self.address);
+        var buf = @as([45]u8, undefined);
+        var fbs = std.io.fixedBufferStream(&buf);
+        try self.address.format(undefined, undefined, fbs.writer());
+        std.log.info("Started listening at " ++ colors.cyan ++ "http://{s}" ++ colors.reset ++ "...", .{fbs.getWritten()});
         while (true) try self.accept();
     }
 
@@ -87,7 +100,7 @@ const Wasmserve = struct {
         var first_line_iter = mem.split(u8, first_line, " ");
         _ = first_line_iter.next(); // skip method
         if (first_line_iter.next()) |uri| {
-            const url = uri;
+            const url = dropFragment(uri);
             const url_path = try self.normalizePath(url);
             defer self.allocator.free(url_path);
 
@@ -96,7 +109,7 @@ const Wasmserve = struct {
             if (mem.eql(u8, url_path, wasm_file_path)) {
                 const wasm_file_path_real = try fs.path.join(self.allocator, &.{ "zig-out/lib", self.exe_step.out_filename });
                 defer self.allocator.free(wasm_file_path_real);
-                try self.respondFile(writer, "application/wasm", wasm_file_path_real);
+                try self.respondFile(writer, wasm_file_path_real);
                 return;
             }
 
@@ -182,19 +195,12 @@ const Wasmserve = struct {
     }
 
     fn watch(self: *Wasmserve) !void {
-        var mtimes = std.AutoHashMap(fs.File.INode, i128).init(self.allocator);
-
-        while (true) : (std.time.sleep(100 * 1000 * 1000)) { // 100ms
+        timer_loop: while (true) : (std.time.sleep(100 * 1000 * 1000)) { // 100ms
             for (self.watch_paths) |unvalidated_path| {
-                const path = try fs.path.resolve(self.allocator, &.{ self.root_dir, unvalidated_path });
+                const path = try self.normalizePath(unvalidated_path);
                 defer self.allocator.free(path);
                 var dir = self.cwd.openIterableDir(path, .{}) catch {
-                    const stat = try self.cwd.statFile(path);
-                    const entry = try mtimes.getOrPut(stat.inode);
-                    if (entry.found_existing and stat.mtime > entry.value_ptr.*) {
-                        try self.compile();
-                    }
-                    entry.value_ptr.* = stat.mtime;
+                    if (try self.checkForUpdate(path)) continue :timer_loop;
                     continue;
                 };
                 defer dir.close();
@@ -202,25 +208,41 @@ const Wasmserve = struct {
                 defer walker.deinit();
                 while (try walker.next()) |walk_entry| {
                     if (walk_entry.kind != .File) continue;
-
-                    const stat = try self.cwd.statFile(walk_entry.path);
-                    const entry = try mtimes.getOrPut(stat.inode);
-                    if (entry.found_existing and stat.mtime > entry.value_ptr.*) {
-                        try self.compile();
-                    }
-                    entry.value_ptr.* = stat.mtime;
+                    if (try self.checkForUpdate(walk_entry.path)) continue :timer_loop;
                 }
             }
         }
     }
 
+    fn checkForUpdate(self: *Wasmserve, path: []const u8) !bool {
+        const stat = try self.cwd.statFile(path);
+        const entry = try self.mtimes.getOrPut(stat.inode);
+        if (entry.found_existing and stat.mtime > entry.value_ptr.*) {
+            std.log.info(colors.yellow ++ "{s}" ++ colors.reset ++ " updated", .{path});
+            try self.compile();
+            entry.value_ptr.* = stat.mtime;
+            return true;
+        }
+        entry.value_ptr.* = stat.mtime;
+        return false;
+    }
+
     fn compile(self: *Wasmserve) !void {
+        std.log.info("Compiling...", .{});
         if (self.build_proc.term == null)
             _ = try self.build_proc.kill();
         try self.build_proc.spawn();
         self.build_proc.term = null;
     }
 };
+
+fn dropFragment(input: []const u8) []const u8 {
+    for (input) |c, i|
+        if (c == '?' or c == '#')
+            return input[0..i];
+
+    return input;
+}
 
 fn thisDir() []const u8 {
     return fs.path.dirname(@src().file) orelse ".";

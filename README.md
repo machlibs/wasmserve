@@ -3,7 +3,6 @@
 ## TODO
 
 - [] Autoreload browser
-- [] Log
 
 ## Getting started
 
