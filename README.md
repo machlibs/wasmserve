@@ -1,4 +1,6 @@
-# mach/foobar - a project template
+# mach/wasmserve
+
+Small web server specifically for serving Zig WASM applications in development
 
 ## Getting started
 
@@ -7,19 +9,20 @@
 In a `libs` subdirectory of the root of your project:
 
 ```sh
-git clone https://github.com/machlibs/foobar
+git clone https://github.com/machlibs/wasmserve
 ```
 
 Then in your `build.zig` add:
 
 ```zig
 ...
-const foobar = @import("libs/foobar/build.zig");
+const wasmserve = @import("libs/wasmserve/wasmserve.zig");
 
 pub fn build(b: *Builder) void {
     ...
-    exe.addPackage(foobar.pkg);
-    foobar.link(b, exe, .{});
+    const serve_step = try wasmserve.serve(exe, ".", .{ .watch_paths = &.{"src/main.zig"} });
+    const run_step = b.step("run", "Run development web server");
+    run_step.dependOn(&serve_step.step);
 }
 ```
 
