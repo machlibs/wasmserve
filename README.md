@@ -1,9 +1,5 @@
 # mach/foobar - a project template
 
-## TODO
-
-- [] Autoreload browser
-
 ## Getting started
 
 ### Adding dependency

@@ -10,6 +10,13 @@
 
 <body>
     <script type="module">
+        var evtSource = new EventSource("/notify");
+        evtSource.addEventListener("message", function (e) {{
+            if (e.data === "reload") {{
+                window.location.reload();
+            }}
+        }});
+
         fetch("{s}")
             .then(response => response.arrayBuffer())
             .then(buffer => WebAssembly.instantiate(buffer))
