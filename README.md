@@ -1,3 +1,7 @@
+# Project moved
+
+This project has graduated into the main codebase: https://github.com/hexops/mach/tree/main/tools/wasmserve
+
 # mach/wasmserve
 
 Small web server specifically for serving Zig WASM applications in development
